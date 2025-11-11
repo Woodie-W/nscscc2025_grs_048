@@ -1,0 +1,61 @@
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+stages:
+  - build
+
+bitstream:
+  stage: build
+  image: nscscc:2019.2
+  tags:
+    - nscscc:2019.2
+  before_script:
+    - source /opt/Xilinx/Vivado/2019.2/settings64.sh
+    - export PATH=/opt/mips-mti-elf/2016.05-06/bin:${PATH}
+  script:
+    - pwd
+    - ls -alh
+    - make -C asm
+    - git config --global --add safe.directory $(pwd)
+
+    # 关键目录
+    - str_dirs=("run_vivado" "src")
+    - diff=""
+    - rebuild=false
+
+    # 判断是否第一次提交
+    - >
+      if [ "${CI_COMMIT_BEFORE_SHA}" == "0000000000000000000000000000000000000000" ]; then
+        rebuild=true
+      else
+        diff=$(git diff --name-only ${CI_COMMIT_BEFORE_SHA} ${CI_COMMIT_SHA})
+        echo "Changed files: $diff"
+        for dir in "${str_dirs[@]}"; do
+          echo "$diff" | grep -q "^$dir/" && rebuild=true
+        done
+      fi
+
+    # 根据 rebuild 决定是否生成 bitstream
+    - |
+      if [ "$rebuild" = true ] || [ ! -f run_vivado/project/thinpad_top.runs/impl_1/thinpad_top.bit ]; then
+        echo "Generating bitstream..."
+        cd run_vivado
+        vivado -mode batch -source create_project.tcl
+        vivado -mode batch -source bit.tcl
+      else
+        echo "No changes detected, using cached bitstream"
+      fi
+
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - run_vivado/project/thinpad_top.runs/impl_1/*.bit
+
+  artifacts:
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+    when: always
+    paths:
+      - asm/*.bin
+      - run_vivado/project/thinpad_top.runs/impl_1/*.bit
+      - run_vivado/project/thinpad_top.runs/*/runme.log
+      - run_vivado/project/thinpad_top.runs/impl_1/timing_summary.rpt
